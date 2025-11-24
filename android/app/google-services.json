@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "290522704139",
+    "firebase_url": "https://ta-penyakit-daun-cabai-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "ta-penyakit-daun-cabai",
+    "storage_bucket": "ta-penyakit-daun-cabai.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:290522704139:android:cbb588b695b72e51ef5a0e",
+        "android_client_info": {
+          "package_name": "com.ta.penyakit_daun"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAcJy9GLcH93J9iHLs8Vvpr0WhvXE35Xac"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

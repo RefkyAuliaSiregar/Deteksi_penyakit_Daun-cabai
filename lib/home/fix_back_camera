@@ -1,0 +1,321 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:penyakit_daun/configure/constants.dart';
+import 'package:penyakit_daun/home/penyakit_daun_cabai.dart';
+import 'package:pytorch_lite/pytorch_lite.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+
+class ObjectDetectionCamera extends StatefulWidget {
+  const ObjectDetectionCamera({Key? key}) : super(key: key);
+
+  @override
+  State<ObjectDetectionCamera> createState() => _ObjectDetectionCameraState();
+}
+
+class _ObjectDetectionCameraState extends State<ObjectDetectionCamera> {
+  // Referensi ke Firebase Realtime Database
+  final DatabaseReference _database = FirebaseDatabase.instance.ref("users");
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  List<ResultObjectDetection>? objectDetectionResults;
+  // String? classificationResult;
+  Duration? objectDetectionInferenceTime;
+  // Duration? classificationInferenceTime;
+  File? _image;
+  ModelObjectDetection? _objectModel;
+  // ClassificationModel? _imageModel;
+  bool _isLoading = false; // Add loading state
+
+  @override
+  void initState() {
+    super.initState();
+    loadModel();
+  }
+
+  Future loadModel() async {
+    // String pathImageModel = "assets/models/model_classification.pt";
+    String pathObjectDetectionModel = "assets/models/fix_revisi.torchscript";
+    try {
+      // _imageModel = await PytorchLite.loadClassificationModel(
+      //   pathImageModel, 224, 224, 1000, // Adjust as needed
+      //   labelPath: "assets/labels/label_classification_imageNet.txt",
+      // );
+      _objectModel = await PytorchLite.loadObjectDetectionModel(
+        pathObjectDetectionModel, 5, 512, 512,
+        // 80,
+        // 640,
+        // 640,
+        labelPath: "assets/labels/label2.txt",
+      );
+    } catch (e) {
+      print("Error loading model: $e");
+    }
+  }
+
+  // Fungsi untuk menyimpan data riwayat berdasarkan User UID
+  Future<void> saveDetectionHistory() async {
+    final user = _auth.currentUser;
+
+    if (user == null) {
+      print("User belum login.");
+      return;
+    }
+
+    final historyEntry = {
+      "tanggal": DateTime.now().toLocal().toString().substring(0, 19),
+      "jenis_deteksi": "Kamera",
+    };
+
+    // Simpan data ke path: users/{User UID}/history
+    await _database
+        .child(user.uid)
+        .child("history")
+        .push()
+        .set(historyEntry);
+  }
+
+  // Future runModels() async {
+  //   setState(() => _isLoading = true);
+  //
+  //   final ImagePicker picker = ImagePicker();
+  //   final XFile? pickedImage =
+  //   await picker.pickImage(source: ImageSource.camera);
+  //   if (pickedImage == null) {
+  //     setState(() => _isLoading = false);
+  //     return;
+  //   }
+  //
+  //   File image = File(pickedImage.path);
+  //   Uint8List imageBytes = await image.readAsBytes(); // Read bytes once
+  //
+  //   // Run both models concurrently
+  //   final results = await Future.wait([
+  //     //     () async {
+  //     //   Stopwatch stopwatch = Stopwatch()..start();
+  //     //   try {
+  //     //     return await _imageModel?.getImagePrediction(imageBytes);
+  //     //   } catch (e) {
+  //     //     print("Error during classification: $e");
+  //     //     return null; // or handle the error as needed
+  //     //   } finally {
+  //     //     classificationInferenceTime = stopwatch.elapsed;
+  //     //   }
+  //     // }(),
+  //         () async {
+  //       Stopwatch stopwatch = Stopwatch()..start();
+  //       try {
+  //         return await _objectModel?.getImagePrediction(
+  //           imageBytes,
+  //           minimumScore: 0.1,
+  //           iOUThreshold: 0.3,
+  //         );
+  //       } catch (e) {
+  //         print("Error during object detection: $e");
+  //         return null; // or handle the error as needed
+  //       } finally {
+  //         objectDetectionInferenceTime = stopwatch.elapsed;
+  //       }
+  //     }(),
+  //   ]);
+  //
+  //   // classificationResult = results[0] as String?;
+  //   objectDetectionResults = results[1] as List<ResultObjectDetection>?;
+  //
+  //   setState(() {
+  //     _image = image;
+  //     _isLoading = false;
+  //   });
+  // }
+
+  Future runModels() async {
+    setState(() => _isLoading = true);
+
+    final ImagePicker picker = ImagePicker();
+    final XFile? pickedImage = await picker.pickImage(source: ImageSource.camera);
+    if (pickedImage == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    File image = File(pickedImage.path);
+    Uint8List imageBytes = await image.readAsBytes(); // Read bytes once
+
+    // Jalankan model deteksi objek
+    try {
+      Stopwatch stopwatch = Stopwatch()..start();
+      objectDetectionResults = await _objectModel?.getImagePrediction(
+        imageBytes,
+        minimumScore: 0.1,
+        iOUThreshold: 0.3,
+      );
+      objectDetectionInferenceTime = stopwatch.elapsed;
+
+      print('object executed in ${stopwatch.elapsed.inMilliseconds} ms');
+
+      if (objectDetectionResults != null && objectDetectionResults!.isNotEmpty) {
+        for (var element in objectDetectionResults!) {
+          print({
+            "score": element?.score,
+            "className": element?.className,
+            "class": element?.classIndex,
+            "rect": {
+              "left": element?.rect.left,
+              "top": element?.rect.top,
+              "width": element?.rect.width,
+              "height": element?.rect.height,
+              "right": element?.rect.right,
+              "bottom": element?.rect.bottom,
+            },
+          });
+        }
+      }
+
+      // Jika deteksi berhasil, simpan data ke Firebase
+      if (objectDetectionResults != null && objectDetectionResults!.isNotEmpty) {
+        await saveDetectionHistory();
+
+        // Cek dan tampilkan detail penyakit
+        final detectedClasses = objectDetectionResults!
+            .map((e) => e.className)
+            .toList();
+
+        List<PenyakitDaunCabai> detectedDiseases = DataPenyakitDaunCabai
+            .daftarPenyakit
+            .where((penyakit) =>
+            detectedClasses.contains(penyakit.jenis)).toList();
+
+        if (detectedDiseases.isNotEmpty) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text("Detail Penyakit Terdeteksi"),
+              content: SizedBox(
+                height: 150,
+                child: ListView.builder(
+                  itemCount: detectedDiseases.length,
+                  itemBuilder: (context, index) {
+                    final penyakit = detectedDiseases[index];
+                    return Center(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            penyakit.namaPenyakit,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text("Gejala: ${penyakit.gejala.join(', ')}"),
+                          const SizedBox(height: 8),
+                          Text("Pencegahan: ${penyakit.pencegahan.join(', ')}"),
+                          const Divider(),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("OK", style: TextStyle(color: Colors.black),),
+                ),
+              ],
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print("Error during object detection: $e");
+    } finally {
+      setState(() {
+        _image = image;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: background,
+      body: Center(
+        child: _isLoading
+            ? const CircularProgressIndicator() // Show loading indicator
+            : Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (_image != null) ...[
+              SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.5,
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: _objectModel!.renderBoxesOnImage(
+                      _image!, objectDetectionResults ?? []),
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Text(
+              //   "Classification Result: ${classificationResult ?? "N/A"}",
+              //   style: const TextStyle(fontSize: 16),
+              // ),
+              // Text(
+              //   "Classification Time: ${classificationInferenceTime?.inMilliseconds ?? "N/A"} ms",
+              //   style: const TextStyle(fontSize: 16),
+              // ),
+              Text(
+                "Object Detection Time: ${objectDetectionInferenceTime?.inMilliseconds ?? "N/A"} ms",
+                style: const TextStyle(fontSize: 16, color: textbiasa),
+              ),
+              const SizedBox(height: 20),
+            ],
+            // ElevatedButton(
+            //   onPressed: runModels,
+            //   child: const Text('Take Photo & Run Models'),
+            // ),
+            Container(
+              height: 45,
+              width: MediaQuery.of(context).size.width / 2.25,
+              child: ElevatedButton(
+                onPressed: runModels,
+                style: ButtonStyle(
+                  shape: MaterialStateProperty.all<RoundedRectangleBorder>(
+                    RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                  backgroundColor:
+                  MaterialStateProperty.all<Color>(button),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _image == null ? 'Deteksi' : 'Ambil Ulang',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 17,
+                          color: textbutton),
+                    ),
+                    const SizedBox(width: 10),
+                    Icon(
+                      _image == null
+                          ? Icons.camera
+                          : Icons.restart_alt_rounded,
+                      color: texticon,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
